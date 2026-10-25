@@ -32,6 +32,7 @@ KEYPOINT_COUNT = {"body": 17, "body_feet": 26, "wholebody": 133}
 HAND_START = {"wholebody": {"l": 91, "r": 112}}
 
 SCORE_THR = 0.35
+MIN_HAND_FRACTION = 0.03  # wrist-to-middle-knuckle length vs image diagonal
 EDGE = 0.01
 
 
@@ -65,8 +66,12 @@ def to_points(kpts: np.ndarray, scores: np.ndarray, layout: str, width: int, hei
     for side, start in HAND_START.get(layout, {}).items():
         hand = [np.asarray(kpts[start + j], dtype=float) for j in range(21)]
         ok = [scores[start + j] >= thr and _inside(hand[j], width, height) for j in range(21)]
-        # Use the hand only when the wrist and most finger points are confidently found.
-        pts.hands[side] = hand if ok[0] and sum(ok) >= 17 else None
+        # Use the hand only when the wrist and most finger points are confidently found, and the hand
+        # is big enough in the picture for finger angles to mean anything (real videos: small, distant
+        # hands gave nonsense finger angles).
+        hand_len = float(np.linalg.norm(hand[9] - hand[0]))
+        big_enough = hand_len >= MIN_HAND_FRACTION * float(np.hypot(width, height))
+        pts.hands[side] = hand if ok[0] and sum(ok) >= 17 and big_enough else None
     return pts
 
 

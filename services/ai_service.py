@@ -42,52 +42,65 @@ def _deg(value: float | None) -> str:
 
 
 async def analyze_sci_movement(req: MovementRequest) -> MuscleAnalysisResult:
-    a = req.angles
     context = req.clinical_context.strip() if req.clinical_context else "none provided"
 
-    def side_lines(name: str, sd) -> str:
-        return "\n".join(
-            f"- {name} {label}: {_deg(getattr(sd, field))}"
-            for field, label in (
-                ("shoulder_flexion", "shoulder flexion"),
-                ("shoulder_abduction", "shoulder abduction"),
-                ("elbow_flexion", "elbow flexion"),
-                ("wrist_deviation", "wrist deviation (unsigned)"),
-                ("hip_flexion", "hip flexion"),
-                ("hip_abduction", "hip abduction"),
-                ("knee_flexion", "knee flexion"),
-                ("ankle_dorsiflexion", "ankle dorsiflexion (+ up / - pointed)"),
-                ("thigh_incl", "thigh segment vs vertical (+ forward)"),
-                ("shank_incl", "shank segment vs vertical (+ forward)"),
+    if req.channels:
+        def fmt(k: str, val: float) -> str:
+            return f"{val:.0f}%" if k.endswith(("_aperture", "_elevation")) else f"{val:.0f} degrees"
+        measured = "\n".join(f"- {k}: {fmt(k, v)}" for k, v in sorted(req.channels.items()) if v is not None)
+        angle_text = f"""Measured channels (side.movement; joint angles 0 = anatomical neutral; *_incl = segment vs vertical; \
+neck and shoulder elevation/protraction are relative to the user's neutral posture; channels not listed were not visible):
+{measured}"""
+    else:
+        a = req.angles
+
+        def side_lines(name: str, sd) -> str:
+            return "\n".join(
+                f"- {name} {label}: {_deg(getattr(sd, field))}"
+                for field, label in (
+                    ("shoulder_flexion", "shoulder flexion"),
+                    ("shoulder_abduction", "shoulder abduction"),
+                    ("elbow_flexion", "elbow flexion"),
+                    ("wrist_deviation", "wrist deviation (unsigned)"),
+                    ("hip_flexion", "hip flexion"),
+                    ("hip_abduction", "hip abduction"),
+                    ("knee_flexion", "knee flexion"),
+                    ("ankle_dorsiflexion", "ankle dorsiflexion (+ up / - pointed)"),
+                    ("thigh_incl", "thigh segment vs vertical (+ forward)"),
+                    ("shank_incl", "shank segment vs vertical (+ forward)"),
+                )
             )
-        )
 
-    ax = a.axial
-    prompt = f"""\
-Neurological level of injury: {req.sci_level}
-AIS grade: {req.ais_grade}
-Exercise: {req.exercise_name}
-
-Measured angles (0 degrees = anatomical neutral; "not measured" = joint not visible):
+        ax = a.axial
+        angle_text = f"""Measured angles (0 degrees = anatomical neutral; "not measured" = joint not visible):
 {side_lines("Left", a.left)}
 {side_lines("Right", a.right)}
 - Neck flexion: {_deg(ax.neck_flexion)}
 - Trunk forward lean (+) from vertical: {_deg(ax.trunk_flexion)}
 - Trunk tilt from vertical (any direction): {_deg(ax.trunk_lean)}
 - Trunk lateral lean (+ right): {_deg(ax.trunk_lateral_lean)}
-- Pelvic obliquity (+ right side higher): {_deg(ax.pelvic_obliquity)}
+- Pelvic obliquity (+ right side higher): {_deg(ax.pelvic_obliquity)}"""
+
+    prompt = f"""\
+Neurological level of injury: {req.sci_level}
+AIS grade: {req.ais_grade}
+Exercise: {req.exercise_name}
+
+{angle_text}
 
 <clinical_context>
 {context}
 </clinical_context>
 
 Using kinesiology and myotome maps (C1-S5):
-1. Identify the muscle groups most likely producing this posture or movement, on each side.
+1. Identify the muscle groups most likely producing this posture or movement, on each side, including hand \
+intrinsics and finger flexors/extensors when finger channels are present.
 2. Hip angles are thigh relative to trunk. Compare hip flexion with the thigh and trunk segment angles: if \
 the trunk lean explains the hip angle, the hip flexors need not be active.
 3. Note any plausible compensation (e.g. trunk or pelvic movement producing apparent leg motion, upper trapezius \
 hitching, tenodesis instead of active finger flexion).
-4. State confidence and limitations honestly.
+4. Body parts with no channels were not visible: never describe them as not moving.
+5. State confidence and limitations honestly.
 """
 
     response = await _client().aio.models.generate_content(
@@ -115,6 +128,7 @@ async def write_session_note(up, result) -> str:
     """Short clinical-style note written from the detector's numbers. The model only writes text."""
     stats = {
         "summary": result.summary,
+        "not_assessed_channels": result.not_assessed,
         "joints": [j.model_dump() for j in result.joints if j.bouts or (j.rom_deg or 0) > 5],
         "bouts_sample": [b.model_dump() for b in result.bouts[:60]],
         "events": [e.model_dump() for e in up.events[:50]],
@@ -132,7 +146,8 @@ Detector output (JSON, computed from joint angles):
 
 Write a concise physical therapy session note (max 180 words): which joints moved, how far, patterns \
 (e.g. trunk-led leg movement, clonus-like oscillation, bilateral synchronous bursts suggesting spasm), \
-and what test would clarify whether movements are voluntary. Do not invent numbers that are not in the data."""
+and what test would clarify whether movements are voluntary. Channels in not_assessed_channels were not visible: \
+say they were not assessed, never that they did not move. Do not invent numbers that are not in the data."""
     response = await _client().aio.models.generate_content(
         model=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL),
         contents=prompt,

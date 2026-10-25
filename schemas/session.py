@@ -35,7 +35,7 @@ class SessionUpload(BaseModel):
             raise ValueError("need at least 2 frames")
         if self.t[-1] > MAX_SECONDS:
             raise ValueError(f"recording longer than {MAX_SECONDS} s")
-        if len(self.joints) > 64:
+        if len(self.joints) > 200:
             raise ValueError("too many joint channels")
         for k, v in self.joints.items():
             if len(v) != n:
@@ -80,6 +80,7 @@ class SessionResult(BaseModel):
     joints: list[JointSummary]
     bouts: list[MovementBout]
     summary: str
+    not_assessed: list[str] = Field(default=[], description="Channels visible too little to judge; unknown, not 'no movement'")
     ai_note: str | None = None
     caveats: list[str]
 

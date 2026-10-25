@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Every neurological level of injury, C1 to S5 (ISNCSCI).
 LEVELS = (
@@ -51,10 +51,26 @@ class KinematicData(BaseModel):
 class MovementRequest(BaseModel):
     sci_level: SciLevel
     ais_grade: AisGrade = "unknown"
-    angles: KinematicData
+    # Either the structured angles (older clients) or flat channels such as "left.index_mcp".
+    angles: KinematicData | None = None
+    channels: dict[str, float | None] | None = None
     exercise_name: str = Field(max_length=100)
     # Optional free text: known muscle grades, gravity-eliminated or not, speed, etc.
     clinical_context: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _one_of(self):
+        if self.angles is None and not self.channels:
+            raise ValueError("send either 'angles' or 'channels'")
+        if self.channels:
+            if len(self.channels) > 200:
+                raise ValueError("too many channels")
+            for k, val in self.channels.items():
+                if len(k) > 64:
+                    raise ValueError("channel name too long")
+                if val is not None and not -360 <= val <= 360:
+                    raise ValueError(f"channel '{k}' out of range")
+        return self
 
 
 class MuscleAnalysisResult(BaseModel):

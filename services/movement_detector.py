@@ -15,6 +15,29 @@ AXIAL_PREFIX = "axial."
 MIN_BOUT_S = 0.15
 MIN_EXCURSION = 3.0
 MERGE_GAP_S = 0.25
+MIN_VISIBLE = 0.5  # a channel seen less than this fraction of the time is "not assessed"
+
+REGIONS = (
+    ("fingers", ("thumb_", "index_", "middle_", "ring_", "little_", "spread_", "pinch_")),
+    ("wrists/forearms", ("wrist_", "forearm_")),
+    ("legs", ("hip_", "knee_", "ankle_", "foot_", "thigh_", "shank_")),
+    ("arms", ("shoulder_flexion", "shoulder_abduction", "shoulder_rotation", "elbow_")),
+    ("shoulder girdle", ("shoulder_elevation", "shoulder_protraction")),
+    ("neck", ("neck_",)),
+    ("trunk/pelvis", ("trunk_", "pelvic_")),
+)
+
+
+def region(name: str) -> str:
+    base = name.split(".", 1)[-1]
+    for label, keys in REGIONS:
+        if any(base.startswith(k) for k in keys):
+            return label
+    return "other"
+
+
+def unit(name: str) -> str:
+    return "%" if name.endswith(("_aperture", "_elevation")) else "deg"
 LEAD_FLAG_MS = 50.0
 
 
@@ -194,24 +217,37 @@ def analyze_session(up: SessionUpload) -> SessionResult:
             group_end = max(group_end, b.end)
     close(group)
 
-    legs = [b for b in bouts if any(j in b.joint for j in ("hip_", "knee_", "ankle_"))]
+    not_assessed = [s.joint for s in summaries if s.visible_fraction < MIN_VISIBLE or s.rom_deg is None]
+    assessed_regions = {region(s.joint) for s in summaries if s.joint not in not_assessed}
+    hidden_regions = sorted({region(j) for j in not_assessed} - assessed_regions)
+
+    legs = [b for b in bouts if region(b.joint) == "legs"]
     lines = [
         f"{dur / 60:.1f} min recorded at about {fps_raw:.0f} frames/s; {len(bouts)} movement bouts across "
-        f"{sum(1 for s in summaries if s.bouts)} joints.",
-        f"Leg bouts: {len(legs)}; led by trunk or pelvis: {sum(b.axial_led for b in legs)}; "
-        f"clonus-like (4.5-8.5 Hz): {sum(b.clonus_like for b in bouts)}; "
-        f"hip bouts where the trunk, not the thigh, did the turning: {sum(b.driver == 'trunk' for b in bouts)}.",
+        f"{sum(1 for s in summaries if s.bouts)} channels.",
     ]
+    if hidden_regions:
+        lines.append(
+            "Not visible enough to assess: " + ", ".join(hidden_regions)
+            + " (unknown, which is not the same as no movement)."
+        )
+    if "legs" in assessed_regions:
+        lines.append(
+            f"Leg bouts: {len(legs)}; led by trunk or pelvis: {sum(b.axial_led for b in legs)}; "
+            f"hip bouts where the trunk, not the thigh, did the turning: {sum(b.driver == 'trunk' for b in bouts)}."
+        )
+    lines.append(f"Clonus-like oscillations (4.5-8.5 Hz): {sum(b.clonus_like for b in bouts)}.")
     peak: dict[str, float] = {}
     for b in bouts:
         peak[b.joint] = max(peak.get(b.joint, 0.0), b.excursion_deg)
     top = sorted(peak.items(), key=lambda kv: -kv[1])[:5]
     if top:
-        lines.append("Biggest single movements: " + ", ".join(f"{j} {v:.0f} deg" for j, v in top) + ".")
+        lines.append("Biggest single movements: " + ", ".join(f"{j} {v:.0f} {unit(j)}" for j, v in top) + ".")
 
     return SessionResult(
         duration_s=round(dur, 2), fps=round(fps_raw, 1), joints=summaries, bouts=bouts,
         summary=" ".join(lines),
+        not_assessed=not_assessed,
         caveats=[
             "Angles come from a single camera; out-of-plane joints (hip rotation, ankle inversion) are unreliable.",
             "Detecting a movement does not show it was voluntary. Pair with timed cues, EMG or a clinical exam.",

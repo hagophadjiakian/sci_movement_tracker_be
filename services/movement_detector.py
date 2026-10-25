@@ -76,6 +76,45 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)))
 
 
+SPIKE_DEG = 25.0  # a single frame this far from its neighbours is a tracking glitch
+MAX_EXCURSION_DEG = 180.0  # no joint movement is larger; bigger "movements" are tracking failures
+
+
+def _unwrap_segments(t: np.ndarray, y: np.ndarray, idx: np.ndarray) -> None:
+    breaks = np.flatnonzero(np.diff(t[idx]) > 0.3)
+    for seg in np.split(idx, breaks + 1):
+        if seg.size < 2:
+            continue
+        u = np.degrees(np.unwrap(np.radians(y[seg])))
+        u -= 360.0 * np.round(np.median(u) / 360.0)  # keep the stretch around its true range
+        y[seg] = u
+
+
+def _clean_deg(t: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, int]:
+    """Make an angle trace usable: no +/-180 flips (segment near horizontal when lying down), no
+    one-frame glitches. Unwrapping happens only inside continuous stretches so gaps cannot add up.
+    Returns the cleaned trace and the number of glitch frames removed."""
+    y = y.copy()
+    idx = np.flatnonzero(np.isfinite(y))
+    if idx.size < 3:
+        return y, 0
+    _unwrap_segments(t, y, idx)
+    removed = 0
+    v = y[idx]
+    if v.size >= 7:
+        from numpy.lib.stride_tricks import sliding_window_view
+
+        med = np.median(sliding_window_view(np.pad(v, 3, mode="edge"), 7), axis=1)
+        bad = np.abs(v - med) > SPIKE_DEG
+        removed = int(bad.sum())
+        y[idx[bad]] = np.nan
+    idx = np.flatnonzero(np.isfinite(y))
+    if idx.size >= 2:
+        y[idx] = (y[idx] + 180.0) % 360.0 - 180.0  # forget offsets the glitches may have caused
+        _unwrap_segments(t, y, idx)
+    return y, removed
+
+
 def _rolling_baseline(y: np.ndarray, fs: float, lag_lo: float = 1.0, lag_hi: float = 3.0) -> np.ndarray:
     """Median of the signal between lag_hi and lag_lo seconds ago: where the joint was resting."""
     n = len(y)
@@ -113,10 +152,15 @@ def analyze_session(up: SessionUpload) -> SessionResult:
 
     summaries: list[JointSummary] = []
     bouts: list[MovementBout] = []
+    glitches = 0
+    rejected = 0
 
     for name, raw in up.joints.items():
         y = np.array([np.nan if v is None else v for v in raw], float)
         vis = float(np.isfinite(y).mean())
+        if unit(name) == "deg":
+            y, removed = _clean_deg(t, y)
+            glitches += removed
         grid, yr = _resample(t, y, fs)
         ys = _smooth(yr, smooth_n)
         good = np.isfinite(ys)
@@ -186,6 +230,9 @@ def analyze_session(up: SessionUpload) -> SessionResult:
             k = int(np.nanargmax(np.abs(dev)))
             exc = float(abs(dev[k]))
             if exc < exc_thr:
+                continue
+            if exc > MAX_EXCURSION_DEG:
+                rejected += 1  # impossible for a joint: the tracker lost the body
                 continue
             hz = _dominant_hz(seg, fs)
             n_bouts += 1
@@ -277,6 +324,12 @@ def analyze_session(up: SessionUpload) -> SessionResult:
     n_slow = sum(b.slow for b in bouts)
     if n_slow:
         lines.append(f"Slow movements (drift from rest, below the speed threshold): {n_slow}.")
+    total = sum(len(v) for v in up.joints.values()) or 1
+    if glitches or rejected:
+        lines.append(
+            f"Tracking quality: {glitches} glitch frames removed ({100 * glitches / total:.1f}% of samples)"
+            + (f", {rejected} impossible movements discarded" if rejected else "") + "."
+        )
     lines.append(f"Sensitivity: {up.sensitivity}.")
     peak: dict[str, float] = {}
     for b in bouts:

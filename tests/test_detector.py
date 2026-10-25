@@ -81,3 +81,23 @@ def test_continuous_movement_not_all_slow():
             sensitivity="high", dur=12)
     b = [x for x in r.bouts if x.joint == "left.hip_flexion"]
     assert b and not all(x.slow for x in b)
+
+
+def test_angle_wrap_near_180_is_not_a_movement():
+    """Lying down, a segment angle sits near +/-180 and flips sign with tiny jitter: no fake 358-degree bout."""
+    def wrap(t):
+        y = 179 + rng.normal(0, 1.0, len(t))
+        return (y + 180) % 360 - 180
+    r = run({"left.shank_incl": wrap}, sensitivity="high")
+    assert not [b for b in r.bouts if b.excursion_deg > 20], [b.excursion_deg for b in r.bouts]
+
+
+def test_single_frame_glitches_removed():
+    """The tracker sometimes outputs a nonsense angle for one frame: not a movement."""
+    def glitchy(t):
+        y = 20 + rng.normal(0, 0.4, len(t))
+        y[::97] = -150  # isolated garbage frames
+        return y
+    r = run({"left.knee_flexion": glitchy}, sensitivity="high")
+    assert not [b for b in r.bouts if b.joint == "left.knee_flexion"]
+    assert "glitch frames removed" in r.summary

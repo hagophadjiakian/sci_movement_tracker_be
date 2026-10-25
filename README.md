@@ -50,6 +50,17 @@ Only one program can use a webcam at a time: close Zoom/Teams/the browser engine
 The engine follows the biggest person and then stays with the same person, so a helper walking
 through the picture does not take over the tracking.
 
+## Real-video tests
+
+Synthetic tests check the math; real videos catch what synthetic data cannot (tracking glitches,
+lying-down postures). Pipeline:
+
+```bash
+python tools/extract_landmarks.py clip.mp4 clip.lm.json                  # real MediaPipe model
+(in sci_movement_tracker_fe) npm run replay -- clip.lm.json clip.session.json   # app's own angle code
+python -c "import json; from schemas.session import SessionUpload; from services.movement_detector import analyze_session; print(analyze_session(SessionUpload(**json.load(open('clip.session.json')))).summary)"
+```
+
 ## Tests
 
 ```bash

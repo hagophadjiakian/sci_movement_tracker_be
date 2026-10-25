@@ -1,0 +1,9 @@
+# Live RTMPose engine (runs the camera and pose model on this computer).
+#   CPU (any laptop):        pip install -r requirements-live.txt
+#   NVIDIA GPU (much faster): pip install -r requirements-live.txt, then
+#                             pip uninstall -y onnxruntime && pip install onnxruntime-gpu
+# The first start downloads the pose models (100-300 MB) into ~/.cache/rtmlib.
+-r requirements.txt
+rtmlib>=0.0.15
+onnxruntime>=1.17
+opencv-python>=4.9

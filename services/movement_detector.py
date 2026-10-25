@@ -15,7 +15,10 @@ AXIAL_PREFIX = "axial."
 MIN_BOUT_S = 0.15
 MIN_EXCURSION = 3.0
 MERGE_GAP_S = 0.25
-MIN_VISIBLE = 0.5  # a channel seen less than this fraction of the time is "not assessed"
+MIN_VISIBLE = 0.5
+# sensitivity -> (noise multiple, minimum excursion in degrees, speed floor in deg/s)
+SENSITIVITY = {"low": (4.0, 5.0, 15.0), "medium": (3.0, 3.0, 10.0), "high": (2.5, 2.0, 5.0)}
+DRIFT_MIN_S = 0.5  # a slow drift must last this long  # a channel seen less than this fraction of the time is "not assessed"
 
 REGIONS = (
     ("fingers", ("thumb_", "index_", "middle_", "ring_", "little_", "spread_", "pinch_")),
@@ -73,6 +76,20 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)))
 
 
+def _rolling_baseline(y: np.ndarray, fs: float, lag_lo: float = 1.0, lag_hi: float = 3.0) -> np.ndarray:
+    """Median of the signal between lag_hi and lag_lo seconds ago: where the joint was resting."""
+    n = len(y)
+    out = np.full(n, np.nan)
+    step = max(1, int(fs / 5))
+    lo, hi = int(lag_lo * fs), int(lag_hi * fs)
+    for i in range(hi, n, step):
+        w = y[i - hi:i - lo]
+        w = w[np.isfinite(w)]
+        if w.size > 0.5 * (hi - lo):
+            out[i:i + step] = np.median(w)
+    return out
+
+
 def _dominant_hz(seg: np.ndarray, fs: float) -> float | None:
     seg = seg[np.isfinite(seg)]
     if len(seg) < int(fs * 0.6):
@@ -92,6 +109,7 @@ def analyze_session(up: SessionUpload) -> SessionResult:
     fps_raw = (len(t) - 1) / dur if dur > 0 else 30.0
     fs = float(min(60.0, max(10.0, round(fps_raw))))
     smooth_n = max(1, int(round(fs * 0.1)))
+    k_noise, min_exc, speed_floor = SENSITIVITY[up.sensitivity]
 
     summaries: list[JointSummary] = []
     bouts: list[MovementBout] = []
@@ -113,15 +131,29 @@ def analyze_session(up: SessionUpload) -> SessionResult:
 
         speed = np.abs(np.gradient(np.where(good, ys, np.nan), 1.0 / fs))
         sp = speed[np.isfinite(speed)]
-        floor = 5.0 if name.startswith(AXIAL_PREFIX) or "_incl" in name else 10.0
-        sp_thr = max(floor, float(np.median(sp) + 5 * 1.4826 * np.median(np.abs(sp - np.median(sp)))))
+        floor = speed_floor / 2 if name.startswith(AXIAL_PREFIX) or "_incl" in name else speed_floor
+        adaptive = float(np.median(sp) + 5 * 1.4826 * np.median(np.abs(sp - np.median(sp))))
+        # Adapt to jitter, but never so high that ordinary movements count as "slow" (happens when the
+        # joint moves for most of a short recording and inflates the median speed).
+        sp_thr = min(max(floor, adaptive), 4 * floor)
+        exc_thr = max(k_noise * noise, min_exc)
         moving = np.nan_to_num(speed) > sp_thr
+
+        # Slow movements: the joint drifts away from where it rested 1-3 s earlier, even if too slowly
+        # to pass the speed threshold (common for weak voluntary attempts after SCI).
+        lp = _smooth(ys, max(3, int(fs * 0.5)))
+        baseline = _rolling_baseline(lp, fs)
+        drift = np.nan_to_num(np.abs(lp - baseline)) > exc_thr
+        drift_runs = [(a, b) for a, b in _runs(drift) if (b - a) / fs >= DRIFT_MIN_S]
+        drift_long = np.zeros_like(drift)
+        for a, b in drift_runs:
+            drift_long[a:b] = True
+        moving = moving | drift_long
 
         # Walk each onset back to where the joint really started moving (speed < 25% of threshold),
         # then merge runs separated by a pause where the joint stays away from its baseline
         # (e.g. the still moment at the top of a knee lift: up-hold-down is one movement).
         runs = _runs(moving)
-        exc_thr = max(3 * noise, MIN_EXCURSION)
         merged: list[list[int]] = []
         for a, b in runs:
             while a > 0 and np.isfinite(speed[a - 1]) and speed[a - 1] > 0.25 * sp_thr:
@@ -144,6 +176,10 @@ def analyze_session(up: SessionUpload) -> SessionResult:
             pre = ys[max(0, a - int(0.2 * fs)):a + 1]
             seg = ys[a:b]
             base = np.nanmedian(pre) if np.isfinite(pre).any() else seg[0]
+            # For slow drifts the 0.2 s before onset is already moving; use the resting baseline too.
+            if np.isfinite(baseline[a]) and drift_long[a:b].any():
+                if np.nanmax(np.abs(seg - baseline[a])) > np.nanmax(np.abs(seg - base)):
+                    base = baseline[a]
             dev = seg - base
             if not np.isfinite(dev).any():
                 continue
@@ -159,6 +195,7 @@ def analyze_session(up: SessionUpload) -> SessionResult:
                 direction="increase" if dev[k] > 0 else "decrease",
                 oscillation_hz=None if hz is None else round(hz, 1),
                 clonus_like=bool(hz is not None and 4.5 <= hz <= 8.5 and (b - a) / fs >= 0.6),
+                slow=bool(np.nanmax(speed[a:b]) < sp_thr),
             ))
         p5, p95 = np.nanpercentile(ys, [5, 95])
         summaries.append(JointSummary(
@@ -237,6 +274,10 @@ def analyze_session(up: SessionUpload) -> SessionResult:
             f"hip bouts where the trunk, not the thigh, did the turning: {sum(b.driver == 'trunk' for b in bouts)}."
         )
     lines.append(f"Clonus-like oscillations (4.5-8.5 Hz): {sum(b.clonus_like for b in bouts)}.")
+    n_slow = sum(b.slow for b in bouts)
+    if n_slow:
+        lines.append(f"Slow movements (drift from rest, below the speed threshold): {n_slow}.")
+    lines.append(f"Sensitivity: {up.sensitivity}.")
     peak: dict[str, float] = {}
     for b in bouts:
         peak[b.joint] = max(peak.get(b.joint, 0.0), b.excursion_deg)

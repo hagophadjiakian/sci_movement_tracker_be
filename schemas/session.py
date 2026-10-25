@@ -20,6 +20,9 @@ class SessionUpload(BaseModel):
     clinical_context: str | None = Field(default=None, max_length=1000)
     started_at: str = Field(description="ISO time the recording started (client clock)")
     stop_reason: Literal["voice_stop", "time_limit", "button"] = "time_limit"
+    # How small a movement counts: high catches slow, tiny movements (and more false alarms).
+    sensitivity: Literal["low", "medium", "high"] = "medium"
+    engine: Literal["browser", "rtmpose"] = "browser"
     # Columnar time series: t[i] goes with joints[name][i]. None = joint not visible in that frame.
     t: list[float]
     joints: dict[str, list[float | None]]
@@ -55,6 +58,7 @@ class MovementBout(BaseModel):
     direction: Literal["increase", "decrease"]
     oscillation_hz: float | None = None
     clonus_like: bool = False
+    slow: bool = Field(default=False, description="Found as a slow drift from rest rather than a quick movement")
     first_mover: str | None = None
     lead_ms: float | None = None
     axial_led: bool = False

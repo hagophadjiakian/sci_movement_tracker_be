@@ -23,7 +23,7 @@ from typing import Any
 
 import numpy as np
 
-from live.angles2d import compute_2d
+from live.angles2d import ViewSelector, compute_2d
 from live.points import KEYPOINT_COUNT, Points, pick_person, to_points
 from live.side_tracker import SideTracker
 
@@ -253,6 +253,7 @@ class LiveEngine:
         cap_thread.start()
 
         tracker = SideTracker()
+        views = ViewSelector(s.view)  # type: ignore[arg-type]
         last_center: np.ndarray | None = None
         last_id = 0
         times: list[float] = []
@@ -284,7 +285,7 @@ class LiveEngine:
             if idx is not None:
                 pts = to_points(kpts[idx], scores[idx], s.model, w, h)
                 tracker.fix(pts)
-                values, meta = compute_2d(pts, s.view)  # type: ignore[arg-type]
+                values, meta = compute_2d(pts, views.update(pts))
                 good = [p for p in pts.named.values() if p is not None]
                 last_center = np.mean(good, axis=0) if good else None
             else:

@@ -60,21 +60,56 @@ def _mid(*pts: np.ndarray | None) -> np.ndarray | None:
     return np.mean(ok, axis=0) if ok else None
 
 
-def detect_view(p: Points) -> Literal["side", "front"]:
+def detect_view(p: Points) -> Literal["side", "front"] | None:
+    """Front (or at the feet of someone lying) vs side, from how wide the body looks. None = can't tell."""
     sh_l, sh_r = p.get("l_shoulder"), p.get("r_shoulder")
-    if sh_l is None or sh_r is None:
-        return "side"
-    width = float(np.linalg.norm(sh_l - sh_r))
-    hip = _mid(p.get("l_hip"), p.get("r_hip"))
-    ear = _mid(p.get("l_ear"), p.get("r_ear"))
-    ref = None
-    if hip is not None:
-        ref = float(np.linalg.norm(_mid(sh_l, sh_r) - hip))
-    elif ear is not None:
-        ref = 2.5 * float(np.linalg.norm(_mid(sh_l, sh_r) - ear))
-    if not ref:
-        return "front"
-    return "front" if width / ref > 0.35 else "side"
+    hip_l, hip_r = p.get("l_hip"), p.get("r_hip")
+    hip = _mid(hip_l, hip_r)
+    if sh_l is not None and sh_r is not None:
+        width = float(np.linalg.norm(sh_l - sh_r))
+        ear = _mid(p.get("l_ear"), p.get("r_ear"))
+        ref = None
+        if hip is not None:
+            ref = float(np.linalg.norm(_mid(sh_l, sh_r) - hip))
+        elif ear is not None:
+            ref = 2.5 * float(np.linalg.norm(_mid(sh_l, sh_r) - ear))
+        if ref:
+            return "front" if width / ref > 0.35 else "side"
+    # Shoulders cut off (e.g. camera at the feet, close up): use hip width against thigh length.
+    if hip_l is not None and hip_r is not None:
+        thighs = [np.linalg.norm(p.get(f"{s}_knee") - p.get(f"{s}_hip"))
+                  for s in ("l", "r") if p.get(f"{s}_knee") is not None and p.get(f"{s}_hip") is not None]
+        if thighs:
+            return "front" if float(np.linalg.norm(hip_l - hip_r)) / float(np.mean(thighs)) > 0.25 else "side"
+    return None
+
+
+class ViewSelector:
+    """Keeps the camera view stable: with view='auto' it changes only after `hold` frames in a row
+    disagree, so the meaning of the angles does not flip from frame to frame."""
+
+    def __init__(self, fixed: View = "auto", hold: int = 20):
+        self.fixed = fixed
+        self.hold = hold
+        self.current: Literal["side", "front"] | None = None if fixed == "auto" else fixed  # type: ignore[assignment]
+        self._streak = 0
+
+    def update(self, p: Points) -> Literal["side", "front"]:
+        if self.fixed != "auto":
+            return self.fixed  # type: ignore[return-value]
+        raw = detect_view(p)
+        if raw is None:
+            self._streak = 0
+            return self.current or "front"
+        if self.current is None:
+            self.current = raw
+        elif raw != self.current:
+            self._streak += 1
+            if self._streak >= self.hold:
+                self.current, self._streak = raw, 0
+        else:
+            self._streak = 0
+        return self.current
 
 
 def detect_facing(p: Points) -> Literal["left", "right"] | None:
@@ -95,7 +130,7 @@ def detect_facing(p: Points) -> Literal["left", "right"] | None:
 
 def compute_2d(p: Points, view: View = "auto") -> tuple[dict[str, float], dict]:
     vals: dict[str, float | None] = {}
-    v = detect_view(p) if view == "auto" else view
+    v = (detect_view(p) or "front") if view == "auto" else view
     facing = detect_facing(p) if v == "side" else None
     meta = {
         "engine": "rtmpose",

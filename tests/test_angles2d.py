@@ -211,3 +211,24 @@ def test_rotations_never_reported_in_2d():
     vals, _ = side_pose(elbow=90).compute("side")
     for k in ("left.shoulder_rotation", "left.forearm_pronation", "left.hip_rotation", "left.ankle_inversion"):
         assert k not in vals
+
+
+def test_view_selector_does_not_flip_on_single_frames():
+    from live.angles2d import ViewSelector
+
+    sel = ViewSelector("auto", hold=5)
+    front, side = front_pose(), side_pose()
+    fp = to_points(front.k, front.s, "wholebody", W, H)
+    sp = to_points(side.k, side.s, "wholebody", W, H)
+    seq = [fp] * 10 + [sp] * 3 + [fp] * 3  # 3 odd frames must not switch
+    assert all(sel.update(p) == "front" for p in seq)
+    assert [sel.update(sp) for _ in range(5)][-1] == "side"  # sustained change does switch
+
+
+def test_view_from_hips_when_shoulders_cut_off():
+    from live.angles2d import detect_view
+
+    p = front_pose()
+    for n in ("l_shoulder", "r_shoulder", "l_ear", "r_ear", "nose"):
+        p.s[LAYOUTS["wholebody"][n]] = 0.0
+    assert detect_view(to_points(p.k, p.s, "wholebody", W, H)) == "front"

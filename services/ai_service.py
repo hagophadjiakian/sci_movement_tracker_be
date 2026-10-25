@@ -57,6 +57,8 @@ async def analyze_sci_movement(req: MovementRequest) -> MuscleAnalysisResult:
                 ("hip_abduction", "hip abduction"),
                 ("knee_flexion", "knee flexion"),
                 ("ankle_dorsiflexion", "ankle dorsiflexion (+ up / - pointed)"),
+                ("thigh_incl", "thigh segment vs vertical (+ forward)"),
+                ("shank_incl", "shank segment vs vertical (+ forward)"),
             )
         )
 
@@ -70,7 +72,8 @@ Measured angles (0 degrees = anatomical neutral; "not measured" = joint not visi
 {side_lines("Left", a.left)}
 {side_lines("Right", a.right)}
 - Neck flexion: {_deg(ax.neck_flexion)}
-- Trunk lean from vertical: {_deg(ax.trunk_lean)}
+- Trunk forward lean (+) from vertical: {_deg(ax.trunk_flexion)}
+- Trunk tilt from vertical (any direction): {_deg(ax.trunk_lean)}
 - Trunk lateral lean (+ right): {_deg(ax.trunk_lateral_lean)}
 - Pelvic obliquity (+ right side higher): {_deg(ax.pelvic_obliquity)}
 
@@ -80,9 +83,11 @@ Measured angles (0 degrees = anatomical neutral; "not measured" = joint not visi
 
 Using kinesiology and myotome maps (C1-S5):
 1. Identify the muscle groups most likely producing this posture or movement, on each side.
-2. Note any plausible compensation (e.g. trunk or pelvic movement producing apparent leg motion, upper trapezius \
+2. Hip angles are thigh relative to trunk. Compare hip flexion with the thigh and trunk segment angles: if \
+the trunk lean explains the hip angle, the hip flexors need not be active.
+3. Note any plausible compensation (e.g. trunk or pelvic movement producing apparent leg motion, upper trapezius \
 hitching, tenodesis instead of active finger flexion).
-3. State confidence and limitations honestly.
+4. State confidence and limitations honestly.
 """
 
     response = await _client().aio.models.generate_content(

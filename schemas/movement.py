@@ -28,10 +28,14 @@ class SideAngles(BaseModel):
     hip_abduction: float | None = _angle("Thigh out (+) / across the midline (-) relative to the pelvis")
     knee_flexion: float | None = _angle("0 = straight", 0, 180)
     ankle_dorsiflexion: float | None = _angle("Foot up (+) / pointed (-); 0 = foot at 90 deg to the shank", -90, 90)
+    # Segment angles (relative to vertical), used to tell thigh movement from trunk movement.
+    thigh_incl: float | None = _angle("Thigh forward (+) of vertical")
+    shank_incl: float | None = _angle("Shank forward (+) of vertical")
 
 
 class AxialAngles(BaseModel):
     neck_flexion: float | None = _angle("Head forward (+) relative to the trunk")
+    trunk_flexion: float | None = _angle("Trunk forward (+) / backward (-) of vertical")
     trunk_lean: float | None = _angle("Trunk tilt from vertical, forward or back (unsigned)", 0, 180)
     trunk_lateral_lean: float | None = _angle("Trunk tilt to the right (+) / left (-) from vertical")
     pelvic_obliquity: float | None = _angle("Right hip higher (+) / lower (-) than the left")

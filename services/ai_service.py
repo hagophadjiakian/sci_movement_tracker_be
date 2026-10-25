@@ -1,3 +1,4 @@
+import json
 import os
 from functools import lru_cache
 
@@ -103,3 +104,33 @@ hitching, tenodesis instead of active finger flexion).
         return MuscleAnalysisResult.model_validate_json(response.text or "")
     except Exception as exc:
         raise ValueError("The model did not return valid structured output.") from exc
+
+
+async def write_session_note(up, result) -> str:
+    """Short clinical-style note written from the detector's numbers. The model only writes text."""
+    stats = {
+        "summary": result.summary,
+        "joints": [j.model_dump() for j in result.joints if j.bouts or (j.rom_deg or 0) > 5],
+        "bouts_sample": [b.model_dump() for b in result.bouts[:60]],
+        "events": [e.model_dump() for e in up.events[:50]],
+    }
+    prompt = f"""\
+Neurological level: {up.sci_level}; AIS grade: {up.ais_grade}; exercise: {up.exercise_name}
+Recording stop reason: {up.stop_reason}
+
+Detector output (JSON, computed from joint angles):
+{json.dumps(stats)[:20000]}
+
+<clinical_context>
+{(up.clinical_context or "none provided").strip()}
+</clinical_context>
+
+Write a concise physical therapy session note (max 180 words): which joints moved, how far, patterns \
+(e.g. trunk-led leg movement, clonus-like oscillation, bilateral synchronous bursts suggesting spasm), \
+and what test would clarify whether movements are voluntary. Do not invent numbers that are not in the data."""
+    response = await _client().aio.models.generate_content(
+        model=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL),
+        contents=prompt,
+        config=types.GenerateContentConfig(system_instruction=SYSTEM_INSTRUCTION, temperature=0.2),
+    )
+    return (response.text or "").strip()

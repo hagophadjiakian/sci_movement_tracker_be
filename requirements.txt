@@ -3,3 +3,4 @@ uvicorn[standard]>=0.28
 pydantic>=2.6
 google-genai>=1.0
 python-dotenv>=1.0
+numpy>=1.26

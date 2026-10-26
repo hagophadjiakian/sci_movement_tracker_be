@@ -128,6 +128,26 @@ def detect_facing(p: Points) -> Literal["left", "right"] | None:
     return None
 
 
+def body_sign(p: Points, trunk: np.ndarray | None) -> float | None:
+    """+1/-1: which rotation direction on screen means "forward" (flexion) for this body.
+
+    Uses the face direction relative to the trunk, so it works upright AND lying down (on the back the
+    nose points to the ceiling, perpendicular to a horizontal trunk). Falls back to the facing test.
+    """
+    nose = p.get("nose")
+    sh = _mid(p.get("l_shoulder"), p.get("r_shoulder"))
+    if trunk is not None and nose is not None and sh is not None and np.linalg.norm(trunk) > 1e-6:
+        tu = trunk / np.linalg.norm(trunk)
+        rel = nose - sh
+        perp = rel - np.dot(rel, tu) * tu
+        if np.linalg.norm(perp) > 3:
+            s = sang(-trunk, perp)
+            if s is not None and abs(s) > 20:
+                return 1.0 if s > 0 else -1.0
+    f = detect_facing(p)
+    return None if f is None else (1.0 if f == "left" else -1.0)
+
+
 def compute_2d(p: Points, view: View = "auto") -> tuple[dict[str, float], dict]:
     vals: dict[str, float | None] = {}
     v = (detect_view(p) or "front") if view == "auto" else view
@@ -161,8 +181,11 @@ def compute_2d(p: Points, view: View = "auto") -> tuple[dict[str, float], dict]:
             a = ang(hp - kn, an - kn)
             put(f"{side}.knee_flexion", None if a is None else 180 - a)
 
-    if v == "side" and facing is not None:
-        sgn = 1.0 if facing == "left" else -1.0
+    body_sgn = body_sign(p, trunk) if v == "side" else None
+    if trunk is not None:
+        meta["posture"] = "lying" if abs(trunk[0]) > abs(trunk[1]) else "upright"
+    if v == "side" and body_sgn is not None:
+        sgn = body_sgn
         if trunk is not None:
             tf = sang(DOWN, -trunk)
             if tf is not None:

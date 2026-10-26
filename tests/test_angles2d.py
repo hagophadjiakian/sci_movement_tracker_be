@@ -232,3 +232,34 @@ def test_view_from_hips_when_shoulders_cut_off():
     for n in ("l_shoulder", "r_shoulder", "l_ear", "r_ear", "nose"):
         p.s[LAYOUTS["wholebody"][n]] = 0.0
     assert detect_view(to_points(p.k, p.s, "wholebody", W, H)) == "front"
+
+
+def lying_pose(hip=0.0, knee=0.0, head_left=True):
+    """Lying on the back, filmed from the side: trunk horizontal, nose pointing at the ceiling."""
+    p = Pose()
+    hip_pt = np.array([W / 2 + 100, H * 0.6])
+    T = np.array([-1.0, 0.0]) if head_left else np.array([1.0, 0.0])  # hips -> shoulders
+    sh = hip_pt + 220 * T
+    for s, dy in (("l", -2.0), ("r", 2.0)):
+        p.put(f"{s}_hip", hip_pt + [0, dy])
+        p.put(f"{s}_shoulder", sh + [0, dy])
+    up = np.array([0.0, -1.0])
+    thigh = rot_toward(-T, up, hip) if hip else -T
+    kn = hip_pt + 150 * thigh
+    shank = rot_toward(thigh, -rot_toward(thigh, up if hip < 80 else T, 90), knee) if knee else thigh
+    for s in ("l", "r"):
+        p.put(f"{s}_knee", kn)
+        p.put(f"{s}_ankle", kn + 140 * shank)
+    ear = sh + 40 * T
+    p.put("l_ear", ear)
+    p.put("nose", ear + 25 * up + 10 * T)
+    return p
+
+
+@pytest.mark.parametrize("head_left", [True, False])
+@pytest.mark.parametrize("hip,knee", [(0, 0), (45, 0), (70, 60), (90, 90)])
+def test_lying_leg_raise(head_left, hip, knee):
+    vals, meta = lying_pose(hip, knee, head_left).compute("side")
+    assert meta.get("posture") == "lying"
+    assert vals["left.hip_flexion"] == pytest.approx(hip, abs=1.5)
+    assert vals["left.knee_flexion"] == pytest.approx(knee, abs=1.5)
